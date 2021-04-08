@@ -10,6 +10,7 @@ variable "fingerprint" {}
 variable "private_key" {}
 variable "ssh_public_key" {}
 
+
 provider "oci" {
   tenancy_ocid = var.tenancy_ocid
   user_ocid = var.user_ocid
@@ -135,23 +136,33 @@ resource "oci_core_instance" "webserver1" {
   }
 }
 
-resource "null_resource" "webserver1HTTPD" {
- depends_on = [oci_core_instance.webserver1]
- provisioner "remote-exec" {
-        connection {
-                type     = "ssh"
-                user     = "opc"
-            host     = data.oci_core_vnic.webserver1_VNIC1.public_ip_address
-                private_key = file(var.private_key_oci)
-                script_path = "/home/opc/myssh.sh"
-                agent = false
-                timeout = "10m"
-        }
-  inline = ["echo '== 1. Installing HTTPD package with yum'",
-            "sudo wget https://objectstorage.us-ashburn-1.oraclecloud.com/p/_taLFTuy_AYrS2PloNwMKVGI-pXqJLjeOC_iXNrutee9xXYuOYMBcqlK8SQO_QuH/n/idqfa2z2mift/b/bootcamp-oci/o/deploy_niture.sh",
+//remote-exec
+resource "null_resource" "web-install" {
+  depends_on = [oci_core_instance.webserver1]
+  connection {
+    type        = "ssh"
+    user        = "opc"
+    host        = oci_core_instance.webserver1.public_ip
+    private_key = var.ssh_private_key
 
-            "echo '== 2. Chmoding the script'",
-            "sudo chmod +x deploy_niture.sh", 
-            "sudo ./deploy_niture.sh"]
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do echo 'Aguarde finalizando a VM...'; sleep 1; done",
+      "sudo yum install httpd -y",
+      "sudo firewall-cmd --zone=public --add-service=http",
+      "sudo firewall-cmd --permanent --zone=public --add-service=http",
+      "cd /var/www/html/",
+      "sudo wget https://objectstorage.us-ashburn-1.oraclecloud.com/p/u8j40_AS-7pRypC5boQT24w5QFPDTy-0j27BWBOfmsxbERTiuDtJQBIqfcsOH81F/n/idqfa2z2mift/b/bootcamp-oci/o/oci-f-handson-modulo-compute-website-files.zip",
+      "sudo sleep 5",
+      "sudo unzip oci-f-handson-modulo-compute-website-files.zip",
+      "sudo chown -R apache:apache /var/www/html",
+      "sudo rm -rf oci-f-handson-modulo-compute-website-files.zip",
+      "sudo systemctl start httpd",
+      "sudo sleep 2",
+      "sudo systemctl enable httpd",
+
+    ]
   }
 }
