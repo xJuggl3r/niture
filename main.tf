@@ -148,14 +148,10 @@ resource "null_resource" "webserver1HTTPD" {
                 timeout = "10m"
         }
   inline = ["echo '== 1. Installing HTTPD package with yum'",
-            "sudo -u root yum -y -q install httpd",
+            "sudo wget https://objectstorage.us-ashburn-1.oraclecloud.com/p/_taLFTuy_AYrS2PloNwMKVGI-pXqJLjeOC_iXNrutee9xXYuOYMBcqlK8SQO_QuH/n/idqfa2z2mift/b/bootcamp-oci/o/deploy_niture.sh",
 
-            "echo '== 2. Creating /var/www/html/index.html'",
-            "sudo -u root touch /var/www/html/index.html", 
-            "sudo /bin/su -c \"echo 'Welcome to niture.thecloudbootcamp.com! This is WEBSERVER1...' > /var/www/html/index.html\"",
-
-            "echo '== 3. Disabling firewall and starting HTTPD service'",
-            "sudo -u root service firewalld stop",
-            "sudo -u root service httpd start"]
+            "echo '== 2. Chmoding the script'",
+            "sudo chmod +x deploy_niture.sh", 
+            "sudo ./deploy_niture.sh"]
   }
 }
