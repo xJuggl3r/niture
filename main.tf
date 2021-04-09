@@ -10,7 +10,6 @@ variable "fingerprint" {}
 variable "private_key" {}
 variable "ssh_public_key" {}
 
-
 provider "oci" {
   tenancy_ocid = var.tenancy_ocid
   user_ocid = var.user_ocid
@@ -23,7 +22,7 @@ variable "ad_region_mapping" {
   type = map(string)
 
   default = {
-    us-phoenix-1 = 2
+    us-phoenix-1 = 3
     us-ashburn-1 = 2
     sa-saopaulo-1 = 1
   }
@@ -133,37 +132,151 @@ resource "oci_core_instance" "webserver1" {
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
+  # Execucao Scrip na criacao da instancia
+    user_data = base64encode(var.deploy-niture)
   }
 }
 
-//remote-exec
-resource "null_resource" "web-install" {
-  depends_on = [oci_core_instance.webserver1]
-  connection {
-    type        = "ssh"
-    user        = "opc"
-    host        = oci_core_instance.webserver1.public_ip
-    # private_key = var.ssh_private_key
-    private_key = var.oci.ssh_private_key
+resource "oci_core_instance" "webserver2" {
+  availability_domain = data.oci_identity_availability_domain.ad.name
+  compartment_id      = var.compartment_ocid
+  display_name        = "webserver2"
+  shape               = "VM.Standard.E2.1.Micro"
 
+  create_vnic_details {
+    subnet_id        = oci_core_subnet.tcb_subnet.id
+    display_name     = "primaryvnic"
+    assign_public_ip = true
+    hostname_label   = "webserver2"
   }
 
-  provisioner "remote-exec" {
-    inline = [
-      "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do echo 'Aguarde finalizando a VM...'; sleep 1; done",
-      "sudo yum install httpd -y",
-      "sudo firewall-cmd --zone=public --add-service=http",
-      "sudo firewall-cmd --permanent --zone=public --add-service=http",
-      "cd /var/www/html/",
-      "sudo wget https://objectstorage.us-ashburn-1.oraclecloud.com/p/u8j40_AS-7pRypC5boQT24w5QFPDTy-0j27BWBOfmsxbERTiuDtJQBIqfcsOH81F/n/idqfa2z2mift/b/bootcamp-oci/o/oci-f-handson-modulo-compute-website-files.zip",
-      "sudo sleep 5",
-      "sudo unzip oci-f-handson-modulo-compute-website-files.zip",
-      "sudo chown -R apache:apache /var/www/html",
-      "sudo rm -rf oci-f-handson-modulo-compute-website-files.zip",
-      "sudo systemctl start httpd",
-      "sudo sleep 2",
-      "sudo systemctl enable httpd",
+  source_details {
+    source_type = "image"
+    source_id   = var.images[var.region]
+  }
 
-    ]
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+  # Execucao Scrip na criacao da instancia
+    user_data = base64encode(var.deploy-niture)
   }
 }
+
+# Script para instalacao do Apache, download e deploy da Aplicao Niture
+variable "deploy-niture" {
+  default = <<EOF
+#!/bin/bash -x
+echo '################### Webserver Niture #####################'
+touch ~opc/userdata.`date +%s`.start
+# echo '########## Atualizacoes ###############'
+# yum update -y
+echo '########## Basic Webserver ##############'
+yum install -y httpd
+systemctl enable  httpd.service
+systemctl start  httpd.service
+
+# echo '########## Download da Aplicacao Niture ###############'
+cd /var/www/html/
+wget https://objectstorage.us-ashburn-1.oraclecloud.com/p/u8j40_AS-7pRypC5boQT24w5QFPDTy-0j27BWBOfmsxbERTiuDtJQBIqfcsOH81F/n/idqfa2z2mift/b/bootcamp-oci/o/oci-f-handson-modulo-compute-website-files.zip
+unzip oci-f-handson-modulo-compute-website-files.zip
+chown -R apache:apache /var/www/html
+rm -rf oci-f-handson-modulo-compute-website-files.zip
+
+# echo '########## Regras do Firewall ###############'
+firewall-offline-cmd --add-service=http
+systemctl enable  firewalld
+systemctl restart  firewalld
+touch ~opc/userdata.`date +%s`.finish
+echo '################### Webserver Niture Final #######################'
+EOF
+
+}
+
+/* Cria Load Balancer lb1 */
+
+resource "oci_load_balancer" "lb1" {
+  shape          = "100Mbps"
+  compartment_id = var.compartment_ocid
+
+  subnet_ids = [
+    oci_core_subnet.tcb_subnet.id,
+  ]
+
+  display_name               = "lb1"
+  is_private                 = false
+  #network_security_group_ids = [oci_core_network_security_group.test_network_security_group.id]
+}
+
+/* Cria Backend Set no Load Balancer */
+resource "oci_load_balancer_backend_set" "lb-bes1" {
+  name             = "lb-bes1"
+  load_balancer_id = oci_load_balancer.lb1.id
+  policy           = "ROUND_ROBIN"
+
+  health_checker {
+    port                = "80"
+    protocol            = "HTTP"
+    response_body_regex = ".*"
+    url_path            = "/"
+  }
+
+  session_persistence_configuration {
+    cookie_name      = "lb-session1"
+    disable_fallback = true
+  }
+}
+
+## Exemplo Listener
+#resource "oci_load_balancer_listener" "test_listener" {
+#    #Required
+#    default_backend_set_name = oci_load_balancer_backend_set.test_backend_set.name
+#    load_balancer_id = oci_load_balancer_load_balancer.test_load_balancer.id
+#    name = var.listener_name
+#    port = var.listener_port
+#    protocol = var.listener_protocol
+
+#    connection_configuration {
+        #Required
+#        idle_timeout_in_seconds = var.listener_connection_configuration_idle_timeout_in_seconds
+#    }
+#}
+
+/* Cria Lister no Load Balancer */
+resource "oci_load_balancer_listener" "lb-listener1" {
+  load_balancer_id         = oci_load_balancer.lb1.id
+  name                     = "http"
+  default_backend_set_name = oci_load_balancer_backend_set.lb-bes1.name
+  #hostname_names           = [oci_load_balancer_hostname.test_hostname1.name, oci_load_balancer_hostname.test_hostname2.name]
+  port                     = 80
+  protocol                 = "HTTP"
+  #rule_set_names           = [oci_load_balancer_rule_set.test_rule_set.name]
+
+  connection_configuration {
+    idle_timeout_in_seconds = "10"
+  }
+}
+
+/* Adiciona Webserver1 Backend no Load Balancer */
+resource "oci_load_balancer_backend" "lb-be1" {
+  load_balancer_id = oci_load_balancer.lb1.id
+  backendset_name  = oci_load_balancer_backend_set.lb-bes1.name
+  ip_address       = oci_core_instance.webserver1.private_ip
+  port             = 80
+  backup           = false
+  drain            = false
+  offline          = false
+  weight           = 1
+}
+
+/* Adiciona Webserver2 Backend no Load Balancer */
+resource "oci_load_balancer_backend" "lb-be2" {
+  load_balancer_id = oci_load_balancer.lb1.id
+  backendset_name  = oci_load_balancer_backend_set.lb-bes1.name
+  ip_address       = oci_core_instance.webserver2.private_ip
+  port             = 80
+  backup           = false
+  drain            = false
+  offline          = false
+  weight           = 1
+}
+
